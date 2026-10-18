@@ -1,0 +1,7 @@
+node_modules/
+.local/
+.netlify/
+.env*
+!.env.example
+*.log
+backups/

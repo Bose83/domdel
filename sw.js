@@ -1,0 +1,2 @@
+self.addEventListener('push',event=>{let data={};try{data=event.data.json()}catch{}event.waitUntil(self.registration.showNotification('Дом вместе',{body:data.body||'В семье есть напоминание',icon:'/icon.svg',tag:'dom-vmeste',renotify:false,data:{url:'/'}}))});
+self.addEventListener('notificationclick',event=>{event.notification.close();event.waitUntil(clients.matchAll({type:'window',includeUncontrolled:true}).then(async windows=>{for(const window of windows)if(new URL(window.url).origin===self.location.origin){await window.focus();return}await clients.openWindow('/')}))});

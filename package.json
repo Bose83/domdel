@@ -15,7 +15,7 @@
   },
   "dependencies": {
     "@netlify/database": "2.0.1",
-    "jsdom": "27.4.0",
+    "jsdom": "26.1.0",
     "pg": "8.23.1",
     "web-push": "3.6.7"
   },
