@@ -1,0 +1,60 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {PGlite} from '@electric-sql/pglite';
+import {JSDOM} from 'jsdom';
+import {createAPI} from '../server/api.mjs';
+process.env.TZ='Europe/Samara';
+function fields(html){const dom=new JSDOM(html||'');const v={};dom.window.document.querySelectorAll('input[id],select[id],textarea[id]').forEach(el=>{if(!el.readOnly&&el.type!=='file')v[el.id]=el.type==='checkbox'?el.checked:el.value});dom.window.close();return v}
+test('real SQL: login persistence, family approval, isolation, replay, conflict, recovery, logout',async()=>{
+ const db=new PGlite();await db.exec(await readFile('netlify/database/migrations/202610180001_initial.sql','utf8'));
+ await db.exec(await readFile('netlify/database/migrations/202610180002_push.sql','utf8'));
+ const handler=createAPI({connect:async()=>({query:(s,p)=>db.query(s,p),release(){}}),query:(s,p)=>db.query(s,p)});
+ function device(ip){return {ip,cookie:'',view:null,async request(path,body,origin='https://app.test'){
+ const req=new Request('https://app.test/api/'+path,{method:body?'POST':'GET',headers:{origin,'Content-Type':'application/json',cookie:this.cookie},...(body?{body:JSON.stringify(body)}:{})});const response=await handler(req,{ip:this.ip});const data=await response.json();if(response.headers.has('set-cookie'))this.cookie=response.headers.get('set-cookie').split(';')[0];return {status:response.status,data,headers:response.headers};
+ },async get(){const r=await this.request('view');assert.equal(r.status,200,JSON.stringify(r.data));this.view=r.data;return r.data},async action(action,id='',extra={}){const payload={action,id,fields:{...fields(this.view.html),...extra},version:this.view.version,revision:this.view.revision,requestId:crypto.randomUUID(),confirmed:true};const r=await this.request('action',payload);if(r.status===200)this.view=r.data;return {...r,payload}}}}
+ const a=device('a'),b=device('b'),c=device('c');
+ const creds={login:'organizer',password:'strong-test-password',name:'Мама'};
+ const registered=await a.request('register',creds);assert.equal(registered.status,200,JSON.stringify(registered.data));assert.match(registered.headers.get('set-cookie'),/HttpOnly; SameSite=Strict; Max-Age=15552000; Secure/);assert.match(registered.data.recovery,/^[a-f0-9]{64}$/);
+ const stored=await db.query('SELECT * FROM accounts');assert(!JSON.stringify(stored.rows).includes(creds.password));assert(!JSON.stringify(stored.rows).includes(registered.data.recovery));
+ assert.equal((await a.get()).setup,true);
+ let r=await a.request('create',{name:'Семья А'});assert.equal(r.status,200,JSON.stringify(r.data));a.view=r.data;
+ const room=(await db.query('SELECT * FROM rooms')).rows[0];
+ const a2=device('a2');a2.cookie=a.cookie;assert((await a2.get()).html.includes('Семья А'));await a.get();
+ await b.request('register',{login:'second',password:'another-test-password',name:'Алиса'});
+ await c.request('register',{login:'outsider',password:'outside-test-password',name:'Друг'});
+ r=await c.request('create',{name:'Чужая семья'});assert.equal(r.status,200);c.view=r.data;
+ assert(!c.view.html.includes('Семья А'));
+ assert.equal((await c.request('export')).data.rooms[0].name,'Чужая семья');
+ r=await b.request('join',{code:room.code,role:'member'});assert.equal(r.status,200,JSON.stringify(r.data));assert.equal(r.data.pending,true);assert(!JSON.stringify(r.data).includes('Мама'));
+ await a.get();await a.action('tab','more');await a.action('tab','family');
+ const request=(await db.query('SELECT data FROM rooms WHERE id=$1',[room.id])).rows[0].data.requests[0];
+ r=await a.action('request-accept',request.id);assert.equal(r.status,200,JSON.stringify(r.data));await b.get();assert(b.view.html.includes('Семья А'));
+ await a.action('tab','today');await a.action('new-task');r=await a.action('save-task','',{'task-title':'Общее дело','task-owner':'','task-quality':false});assert.equal(r.status,200,JSON.stringify(r.data));
+ const task=(await db.query('SELECT data FROM rooms WHERE id=$1',[room.id])).rows[0].data.tasks[0];
+ await b.get();await b.action('tab','pool');
+ r=await a.action('take',task.id);assert.equal(r.status,200,JSON.stringify(r.data));
+ const same=await a.request('action',r.payload);assert.equal(same.status,200);a.view=same.data;
+ r=await b.action('take',task.id);assert.equal(r.status,409);
+ await b.get();r=await b.action('done',task.id);assert([403,409].includes(r.status));
+ const before=(await db.query('SELECT data FROM rooms WHERE id=$1',[room.id])).rows[0].data;
+ r=await b.request('action',{action:'switch-person',id:before.members[0].id,version:b.view.version,revision:b.view.revision,requestId:crypto.randomUUID(),fields:{}});assert.equal(r.status,403);
+ await a.get();r=await a.action('done',task.id);assert.equal(r.status,200,JSON.stringify(r.data));
+ let after=(await db.query('SELECT data FROM rooms WHERE id=$1',[room.id])).rows[0].data;assert.equal(after.members[0].stars,1);
+ await a.request('action',r.payload);after=(await db.query('SELECT data FROM rooms WHERE id=$1',[room.id])).rows[0].data;assert.equal(after.members[0].stars,1);
+ assert.equal((await a.request('logout',{},'https://evil.test')).status,403);
+ const recovered=await a2.request('recover',{login:creds.login,password:'new-long-password',recovery:registered.data.recovery});assert.equal(recovered.status,200,JSON.stringify(recovered.data));assert.notEqual(recovered.data.recovery,registered.data.recovery);
+ assert.equal((await a.request('view')).status,401);
+ assert.equal((await a.request('login',creds)).status,401);
+ assert.equal((await a.request('login',{login:creds.login,password:'new-long-password'})).status,200);
+ assert.equal((await a2.request('recover',{login:creds.login,password:'new-long-password',recovery:registered.data.recovery})).status,401);
+ assert.equal((await a.request('logout-all',{})).status,200);assert.equal((await a2.request('view')).status,401);
+ // Authentication never treats input as SQL.
+ assert.equal((await c.request('login',{login:"' OR 1=1 --",password:'outside-test-password'})).status,400);
+ assert.equal((await db.query('SELECT count(*) AS n FROM accounts')).rows[0].n,3);
+ const d=device('rate-test');await d.request('register',{login:'rateuser',name:'Тест',password:'rate-test-password'});
+ for(let i=0;i<5;i++)assert.equal((await d.request('join',{code:'AAAAAAAAAA'})).status,400);
+ assert.equal((await d.request('join',{code:'AAAAAAAAAA'})).status,429);
+ const tooBig=await d.request('join',{code:'x'.repeat(1200001)});assert.equal(tooBig.status,413);
+ await db.close();
+});

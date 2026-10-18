@@ -1,0 +1,22 @@
+[build]
+ command = "npm run build"
+ publish = "public"
+[build.environment]
+ NODE_VERSION = "22"
+ TZ = "Europe/Samara"
+[functions]
+ directory = "netlify/functions"
+ node_bundler = "esbuild"
+ external_node_modules = ["jsdom"]
+[[headers]]
+ for = "/*"
+ [headers.values]
+  X-Content-Type-Options = "nosniff"
+  X-Frame-Options = "DENY"
+  Referrer-Policy = "same-origin"
+  Permissions-Policy = "camera=(), microphone=(), geolocation=()"
+  Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+[[headers]]
+ for = "/api/*"
+ [headers.values]
+  Cache-Control = "no-store"

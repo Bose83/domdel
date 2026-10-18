@@ -1,0 +1,26 @@
+{
+  "name": "dom-vmeste-netlify",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "npm run build && node --test --test-concurrency=1 tests/*.test.mjs",
+    "dev": "node scripts/dev.mjs",
+    "check:functions": "npm run build && node scripts/check-functions.mjs",
+    "push:keys": "node scripts/push-keys.mjs"
+  },
+  "dependencies": {
+    "@netlify/database": "2.0.1",
+    "jsdom": "27.4.0",
+    "pg": "8.23.1",
+    "web-push": "3.6.7"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.3.16",
+    "@netlify/zip-it-and-ship-it": "16.3.1"
+  }
+}
